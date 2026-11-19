@@ -2,11 +2,13 @@ import 'dotenv/config';
 import { createBot } from './bot/bot.ts';
 import { loadConfig } from './config/config.ts';
 import { createLogger } from './utils/logger.ts';
+import { openDatabase } from './db/database.ts';
 
 async function main(): Promise<void> {
   const config = loadConfig(process.env);
   const logger = createLogger(config.logLevel);
   const bot = createBot(config, logger);
+  const db = openDatabase(config.databasePath);
   // launch resolves when polling stops, so register signal handlers first.
   let stopping = false;
   const shutdown = (signal: string): void => {
@@ -17,13 +19,20 @@ async function main(): Promise<void> {
       bot.stop(signal);
     } catch {
       // Polling has not started yet; terminate without waiting for startup requests.
+      db.close();
       process.exit(0);
     }
   };
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
   logger.info('Bot', 'Starting application');
-  await bot.launch();
+  try {
+    await bot.launch();
+  } finally {
+    process.removeListener('SIGINT', shutdown);
+    process.removeListener('SIGTERM', shutdown);
+    db.close();
+  }
 }
 
 main().catch((error: unknown) => {
