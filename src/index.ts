@@ -3,12 +3,13 @@ import { createBot } from './bot/bot.ts';
 import { loadConfig } from './config/config.ts';
 import { createLogger } from './utils/logger.ts';
 import { openDatabase } from './db/database.ts';
+import { SupplierRepository } from './features/suppliers/supplier.repository.ts';
 
 async function main(): Promise<void> {
   const config = loadConfig(process.env);
   const logger = createLogger(config.logLevel);
-  const bot = createBot(config, logger);
   const db = openDatabase(config.databasePath);
+  const bot = createBot(config, logger, new SupplierRepository(db));
   // launch resolves when polling stops, so register signal handlers first.
   let stopping = false;
   const shutdown = (signal: string): void => {
@@ -27,6 +28,7 @@ async function main(): Promise<void> {
   process.once('SIGTERM', shutdown);
   logger.info('Bot', 'Starting application');
   try {
+    await bot.telegram.setMyCommands([{ command: 'start', description: 'Մատակարարներ' }, { command: 'new', description: 'Գլխավոր էջ' }, { command: 'addsupplier', description: 'Ավելացնել մատակարար' }, { command: 'cancel', description: 'Չեղարկել' }]);
     await bot.launch();
   } finally {
     process.removeListener('SIGINT', shutdown);

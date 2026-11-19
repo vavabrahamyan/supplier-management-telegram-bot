@@ -1,8 +1,10 @@
 import { Telegraf } from 'telegraf';
 import type { Config } from '../config/config.types.ts';
 import type { Logger } from '../utils/logger.types.ts';
+import type { SupplierRepository } from '../features/suppliers/supplier.repository.ts';
+import { registerSupplierMenu } from './supplier-menu.ts';
 
-export function createBot(config: Config, logger: Logger): Telegraf {
+export function createBot(config: Config, logger: Logger, suppliers: SupplierRepository): Telegraf {
   const bot = new Telegraf(config.botToken);
   bot.use(async (ctx, next) => {
     if (!ctx.from?.username || !config.allowedTelegramUsernames.has(ctx.from.username.toLowerCase())) {
@@ -11,9 +13,7 @@ export function createBot(config: Config, logger: Logger): Telegraf {
     }
     await next();
   });
-  bot.start(async (ctx) => {
-    await ctx.reply('Բարի գալուստ։ Բոտը դեռ մշակման փուլում է։');
-  });
+  registerSupplierMenu(bot, suppliers);
   bot.catch(() => {
     logger.error('Bot', 'An update could not be processed');
   });
