@@ -21,7 +21,7 @@ test('initializes directories and repeatable migrations with foreign keys enable
     assert.throws(() => db.prepare('INSERT INTO child VALUES (?)').run(999));
     db.close();
     const reopened = openDatabase(path);
-    try { assert.equal(reopened.prepare('SELECT count(*) AS count FROM schema_migrations').get()?.count, 1); }
+    try { assert.equal(reopened.prepare('SELECT count(*) AS count FROM schema_migrations').get()?.count, 2); }
     finally { reopened.close(); }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });

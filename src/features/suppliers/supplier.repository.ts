@@ -78,6 +78,28 @@ export class SupplierRepository {
     return result.changes ? this.getById(id) : undefined;
   }
 
+  findByName(name: string): Supplier | undefined {
+    const row = this.db.prepare('SELECT * FROM suppliers WHERE name_key = ?').get(key(normalizeName(name)));
+    return row ? map(row) : undefined;
+  }
+
+  listCategories(): { id: number; name: string }[] {
+    return this.db.prepare(`SELECT c.id, c.name FROM product_categories c
+      LEFT JOIN suppliers s ON s.product_types = c.name AND s.archived = 0
+      GROUP BY c.id ORDER BY count(s.id) DESC, c.name_key`).all().map((row) => ({ id: Number(row.id), name: String(row.name) }));
+  }
+
+  setCategory(id: number, name: string): void {
+    const normalized = normalizeName(name);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.prepare('INSERT INTO product_categories (name, name_key) VALUES (?, ?) ON CONFLICT(name_key) DO NOTHING').run(normalized, key(normalized));
+      const row = this.db.prepare('SELECT name FROM product_categories WHERE name_key = ?').get(key(normalized));
+      this.db.prepare("UPDATE suppliers SET product_types = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND archived = 0").run(String(row!.name), id);
+      this.db.exec('COMMIT');
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+
   archive(id: number): boolean {
     return Number(this.db.prepare("UPDATE suppliers SET archived = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND archived = 0").run(id).changes) > 0;
   }

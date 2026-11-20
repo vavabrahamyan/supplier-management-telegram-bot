@@ -3,7 +3,7 @@
 ## Finalized requirements
 
 - The application is a single-user Telegram bot with access restricted to explicitly configured Telegram usernames. User-facing text is Armenian. It is not a Mini App.
-- Provide a compact supplier dashboard and supplier search. Add suppliers through the Telegram command menu.
+- Provide a compact supplier dashboard and supplier search. Add suppliers through the Telegram command menu, main menu, or an empty search result.
 - Support an Order → Waiting → History workflow. Order and Waiting lists use binary checklists with pagination. Checked Order items move to Waiting; unchecked items remain in Order. Checked Waiting items move to History; unchecked items remain in Waiting. Waiting items can also be returned or removed manually.
 - Each supplier has one combined Waiting list and one combined editable note.
 - A supplier may have multiple active price lists. Store files in Google Drive and their metadata in SQLite.

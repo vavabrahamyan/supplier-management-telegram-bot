@@ -29,6 +29,7 @@ const migrations = [
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1))
   );`,
+  `CREATE TABLE product_categories (id INTEGER PRIMARY KEY, name TEXT NOT NULL, name_key TEXT NOT NULL UNIQUE);`,
 ];
 
 export function openDatabase(path: string): DatabaseSync {
