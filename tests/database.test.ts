@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { DatabaseSync } from 'node:sqlite';
+import { OrderRepository } from '../src/features/orders/order.repository.ts';
 import { join } from 'node:path';
 import { openDatabase, transaction } from '../src/db/database.ts';
 import { SupplierRepository } from '../src/features/suppliers/supplier.repository.ts';
@@ -21,7 +23,7 @@ test('initializes directories and repeatable migrations with foreign keys enable
     assert.throws(() => db.prepare('INSERT INTO child VALUES (?)').run(999));
     db.close();
     const reopened = openDatabase(path);
-    try { assert.equal(reopened.prepare('SELECT count(*) AS count FROM schema_migrations').get()?.count, 2); }
+    try { assert.equal(reopened.prepare('SELECT count(*) AS count FROM schema_migrations').get()?.count, 3); }
     finally { reopened.close(); }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
@@ -82,4 +84,44 @@ test('rolls back all writes on transaction failure', () => {
     transaction(db, () => suppliers.create({ name: 'Persisted' }));
     assert.equal(suppliers.listActive().length, 1);
   } finally { db.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+
+test('upgrades a version 2 database without changing existing supplier data', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'supplier-upgrade-'));
+  const path = join(directory, 'previous.sqlite');
+  const old = new DatabaseSync(path);
+  try {
+    old.exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+      CREATE TABLE suppliers (
+        id INTEGER PRIMARY KEY, name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+        name_key TEXT NOT NULL UNIQUE CHECK (length(name_key) > 0),
+        phone TEXT, website TEXT, address TEXT, product_types TEXT, order_days TEXT,
+        delivery_days TEXT, working_hours TEXT, payment_terms TEXT, general_information TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1))
+      );
+      CREATE TABLE product_categories (id INTEGER PRIMARY KEY, name TEXT NOT NULL, name_key TEXT NOT NULL UNIQUE);
+      INSERT INTO schema_migrations (version) VALUES (1), (2);
+      INSERT INTO suppliers (id, name, name_key, phone, address) VALUES (42, 'Existing', 'existing', '012345678', 'Yerevan');
+      INSERT INTO product_categories (name, name_key) VALUES ('Parts', 'parts');`);
+  } finally { old.close(); }
+  try {
+    const db = openDatabase(path);
+    try {
+      assert.deepEqual(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all().map((row) => row.version), [1, 2, 3]);
+      const supplier = new SupplierRepository(db).getById(42);
+      assert.equal(supplier?.name, 'Existing');
+      assert.equal(supplier?.phone, '012345678');
+      assert.equal(supplier?.address, 'Yerevan');
+      assert.equal(db.prepare('SELECT name FROM product_categories').get()?.name, 'Parts');
+      const orders = new OrderRepository(db);
+      orders.append(42, ['Existing supplier item']);
+      assert.equal(orders.list(42)[0]?.text, 'Existing supplier item');
+    } finally { db.close(); }
+    const reopened = openDatabase(path);
+    try { assert.equal(new OrderRepository(reopened).list(42).length, 1); }
+    finally { reopened.close(); }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });

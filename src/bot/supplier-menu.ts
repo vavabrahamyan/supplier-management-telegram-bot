@@ -1,5 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { Markup, type Context, type Telegraf } from 'telegraf';
+import type { OrderRepository } from '../features/orders/order.repository.ts';
+import { orderPages, parseOrderItems } from '../features/orders/order.ts';
 import type { SupplierRepository } from '../features/suppliers/supplier.repository.ts';
 import type { Supplier } from '../features/suppliers/supplier.types.ts';
 import { text } from '../texts/suppliers.ts';
@@ -13,7 +15,7 @@ const weekdays = ['Ամեն երկուշաբթի', 'Ամեն երեքշաբթի'
 const prompts: Record<SupplierField, string> = { name: 'Մուտքագրեք նոր անվանումը։', phone: 'Մուտքագրեք նոր հեռախոսահամար(ներ)', website: 'Մուտքագրեք նոր կայք', address: 'Մուտքագրեք նոր հասցեն։', productTypes: 'Ընտրեք ապրանքատեսակը։', orderDays: 'Ընտրեք պատվերի օրերը։', deliveryDays: 'Ընտրեք առաքման օրերը։', workingHours: 'Մուտքագրեք նոր աշխատանքային ժամերը՝ ԺԺ:ՐՐ-ԺԺ:ՐՐ։', paymentTerms: 'Ընտրեք վճարման եղանակը։', generalInformation: 'Մուտքագրեք նոր ընդհանուր տեղեկությունը։' };
 const details = ['phone', 'website', 'address', 'productTypes', 'orderDays', 'deliveryDays', 'workingHours', 'paymentTerms', 'generalInformation'] as const;
 
-export function registerSupplierMenu(bot: Telegraf, repository: SupplierRepository): void {
+export function registerSupplierMenu(bot: Telegraf, repository: SupplierRepository, orders: OrderRepository): void {
   const sessions = new Map<string, Interaction>();
   const sessionKey = (ctx: Context) => `${ctx.chat!.id}:${ctx.from!.id}`;
   const list = (query?: string) => query === undefined ? repository.listActive() : repository.searchByName(query);
@@ -23,6 +25,8 @@ export function registerSupplierMenu(bot: Telegraf, repository: SupplierReposito
     const state: Interaction = { screen, token: token() };
     let message: string;
     let boldName: string | undefined;
+    let codeOffset: number | undefined;
+    let codeLength = 0;
     let buttons: ReturnType<typeof Markup.button.callback>[][] = [];
     if (screen.kind === 'list') {
       const suppliers = list(screen.query);
@@ -49,7 +53,33 @@ export function registerSupplierMenu(bot: Telegraf, repository: SupplierReposito
         const information = details.flatMap((field) => supplier[field] ? [`${text[field]}: ${supplier[field]}`] : []).join('\n');
         message = supplier.name + (information ? `\n\n${information}` : '');
         boldName = supplier.name;
-        buttons = [[Markup.button.callback(text.information, callback(state, 'info')), Markup.button.callback(text.archive, callback(state, 'archive'))], [Markup.button.callback(text.back, callback(state, 'back'))]];
+        buttons = [[Markup.button.callback(`${text.order} (${orders.list(screen.id).length})`, callback(state, 'order'))], [Markup.button.callback(text.information, callback(state, 'info')), Markup.button.callback(text.archive, callback(state, 'archive'))], [Markup.button.callback(text.back, callback(state, 'back'))]];
+      } else if (screen.kind === 'order') {
+        const items = orders.list(screen.id).map((item) => item.text);
+        const complete = items.join('\n');
+        const pages = orderPages(items);
+        screen.orderPage = Math.max(0, Math.min(screen.orderPage, Math.max(0, pages.length - 1)));
+        const heading = `${supplier.name.slice(0, 200)}\n\n${text.order}`;
+        boldName = supplier.name.slice(0, 200);
+        const page = pages[screen.orderPage];
+        message = `${heading}\n\n${screen.copying ? `${text.orderCopyHint}\n\n` : ''}${page || text.orderEmpty}`;
+        if (screen.copying && page) { codeOffset = prefix.length + message.length - page.length; codeLength = page.length; }
+        const nav = [];
+        if (screen.orderPage > 0) nav.push(Markup.button.callback(text.previous, callback(state, `op:${screen.orderPage - 1}`)));
+        if (screen.orderPage + 1 < pages.length) nav.push(Markup.button.callback(text.next, callback(state, `op:${screen.orderPage + 1}`)));
+        if (nav.length) buttons.push(nav);
+        buttons.push([Markup.button.callback(text.orderAdd, callback(state, 'orderAdd')), Markup.button.callback(text.orderEdit, callback(state, 'orderEdit'))]);
+        if (complete) {
+          if (complete.length <= 256) {
+            // Telegraf's bundled Telegram types predate Bot API's copy_text button.
+            buttons.push([{ text: text.orderCopy, copy_text: { text: complete } } as unknown as ReturnType<typeof Markup.button.callback>]);
+          } else if (!screen.copying) buttons.push([Markup.button.callback(text.orderCopy, callback(state, 'orderCopy'))]);
+        }
+        buttons.push([Markup.button.callback(text.back, callback(state, screen.copying ? 'order' : 'workspace'))]);
+      } else if (screen.kind === 'orderInput') {
+        message = screen.operation === 'append' ? text.orderPromptAdd : text.orderPromptEdit;
+        if (screen.operation === 'replace') buttons.push([Markup.button.callback(text.orderClear, callback(state, 'orderClear'))]);
+        buttons.push([Markup.button.callback(text.cancel, callback(state, 'order'))]);
       } else if (screen.kind === 'information') {
         message = `${supplier.name}\n\n${details.map((field) => `${text[field]}: ${supplier[field] || '—'}`).join('\n')}`;
         boldName = supplier.name;
@@ -78,7 +108,10 @@ export function registerSupplierMenu(bot: Telegraf, repository: SupplierReposito
       message = screen.kind === 'add' ? text.addPrompt : text.searchPrompt;
       buttons = [[Markup.button.callback(text.cancel, callback(state, 'home'))]];
     }
-    const options = { ...Markup.inlineKeyboard(buttons), ...(boldName ? { entities: [{ type: 'bold' as const, offset: prefix.length, length: boldName.length }] } : {}) };
+    const entities: ({ type: 'bold' | 'code'; offset: number; length: number })[] = [];
+    if (boldName) entities.push({ type: 'bold', offset: prefix.length, length: boldName.length });
+    if (codeOffset !== undefined) entities.push({ type: 'code', offset: codeOffset, length: codeLength });
+    const options = { ...Markup.inlineKeyboard(buttons), ...(entities.length ? { entities } : {}) };
     if (edit && ctx.callbackQuery?.message && 'message_id' in ctx.callbackQuery.message) {
       await ctx.editMessageText(prefix + message, options);
       state.messageId = ctx.callbackQuery.message.message_id;
@@ -118,7 +151,16 @@ export function registerSupplierMenu(bot: Telegraf, repository: SupplierReposito
     else if (action === 'add' && screen.kind === 'list' && (screen.query === undefined || list(screen.query).length === 0)) next = { kind: 'add' };
     else if (action === 'search' && screen.kind === 'list') next = { kind: 'search' };
     else if (action === 'info' && (screen.kind === 'workspace' || screen.kind === 'edit')) next = { ...screen, kind: 'information' };
-    else if (action === 'workspace' && (screen.kind === 'information' || screen.kind === 'confirmArchive')) next = workspace(screen);
+    else if (action === 'workspace' && (screen.kind === 'information' || screen.kind === 'confirmArchive' || screen.kind === 'order')) next = workspace(screen);
+    else if (action === 'order' && (screen.kind === 'workspace' || screen.kind === 'orderInput' || screen.kind === 'order')) next = { ...screen, kind: 'order', orderPage: 0, copying: false };
+    else if (screen.kind === 'order' && (action === 'orderAdd' || action === 'orderEdit')) next = { ...screen, kind: 'orderInput', operation: action === 'orderAdd' ? 'append' : 'replace' };
+    else if (screen.kind === 'order' && action === 'orderCopy' && orders.list(screen.id).map((item) => item.text).join('\n').length > 256) next = { ...screen, copying: true, orderPage: 0 };
+    else if (screen.kind === 'order' && /^op:\d+$/.test(action)) {
+      const target = Number(action.slice(3));
+      const count = orderPages(orders.list(screen.id).map((item) => item.text)).length;
+      if (Number.isSafeInteger(target) && target < count && Math.abs(target - screen.orderPage) === 1) next = { ...screen, orderPage: target };
+    }
+    else if (screen.kind === 'orderInput' && screen.operation === 'replace' && action === 'orderClear') { orders.replace(screen.id, []); next = { ...screen, kind: 'order', orderPage: 0 }; prefix = `${text.saved}\n\n`; }
     else if (action === 'archive' && screen.kind === 'workspace') next = { ...screen, kind: 'confirmArchive' };
     else if (action === 'confirm' && screen.kind === 'confirmArchive') { repository.archive(screen.id); next = { kind: 'list', page: 0 }; prefix = `${text.archived}\n\n`; }
     else if (action.startsWith('field:') && screen.kind === 'information' && fields.includes(action.slice(6) as SupplierField)) next = { ...screen, kind: 'edit', field: action.slice(6) as SupplierField, mode: undefined, intervalValue: undefined };
@@ -154,13 +196,26 @@ export function registerSupplierMenu(bot: Telegraf, repository: SupplierReposito
   });
   bot.on('text', async (ctx, nextHandler) => {
     const state = sessions.get(sessionKey(ctx));
-    if (!state || (state.screen.kind !== 'add' && state.screen.kind !== 'search' && state.screen.kind !== 'edit')) return nextHandler();
+    if (!state || (state.screen.kind !== 'add' && state.screen.kind !== 'search' && state.screen.kind !== 'edit' && state.screen.kind !== 'orderInput')) return nextHandler();
     if (ctx.message.text.startsWith('/')) return nextHandler();
     const value = ctx.message.text.trim();
     if (!value) { await ctx.reply(text.invalid); return; }
     if (state.screen.kind === 'search') {
       sessions.delete(sessionKey(ctx));
       await render(ctx, { kind: 'list', page: 0, query: value });
+      return;
+    }
+    if (state.screen.kind === 'orderInput') {
+      const screen = state.screen;
+      const supplier = repository.getById(screen.id);
+      if (!supplier || supplier.archived) { sessions.delete(sessionKey(ctx)); await render(ctx, { kind: 'list', page: 0 }, false, `${text.missing}\n\n`); return; }
+      let items: string[];
+      try { items = parseOrderItems(ctx.message.text); }
+      catch { await ctx.reply(text.orderInvalid); return; }
+      try { if (screen.operation === 'append') orders.append(screen.id, items); else orders.replace(screen.id, items); }
+      catch (error) { if (error instanceof RangeError) { await ctx.reply(text.orderInvalid); return; } throw error; }
+      sessions.delete(sessionKey(ctx));
+      await render(ctx, { ...screen, kind: 'order', orderPage: 0 }, false, `${text.saved}\n\n`);
       return;
     }
     if (state.screen.kind === 'edit') {

@@ -30,6 +30,15 @@ const migrations = [
     archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1))
   );`,
   `CREATE TABLE product_categories (id INTEGER PRIMARY KEY, name TEXT NOT NULL, name_key TEXT NOT NULL UNIQUE);`,
+  `CREATE TABLE order_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
+    text TEXT NOT NULL CHECK (length(trim(text)) > 0 AND length(text) <= 1000),
+    position INTEGER NOT NULL CHECK (position >= 0),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE(supplier_id, position)
+  );`,
 ];
 
 export function openDatabase(path: string): DatabaseSync {
