@@ -39,6 +39,15 @@ const migrations = [
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     UNIQUE(supplier_id, position)
   );`,
+  `CREATE TABLE waiting_items (
+    id INTEGER PRIMARY KEY,
+    supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
+    text TEXT NOT NULL CHECK(length(trim(text)) > 0),
+    position INTEGER NOT NULL CHECK(position >= 0),
+    created_at TEXT NOT NULL,
+    confirmed_at TEXT NOT NULL,
+    UNIQUE(supplier_id, position)
+  );`,
 ];
 
 export function openDatabase(path: string): DatabaseSync {

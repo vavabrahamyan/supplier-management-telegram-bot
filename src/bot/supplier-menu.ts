@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { Markup, type Context, type Telegraf } from 'telegraf';
-import type { OrderRepository } from '../features/orders/order.repository.ts';
+import { OrderChangedError, type OrderRepository } from '../features/orders/order.repository.ts';
 import { orderPages, parseOrderItems } from '../features/orders/order.ts';
 import type { SupplierRepository } from '../features/suppliers/supplier.repository.ts';
 import type { Supplier } from '../features/suppliers/supplier.types.ts';
@@ -68,6 +68,7 @@ export function registerSupplierMenu(bot: Telegraf, repository: SupplierReposito
         if (screen.orderPage > 0) nav.push(Markup.button.callback(text.previous, callback(state, `op:${screen.orderPage - 1}`)));
         if (screen.orderPage + 1 < pages.length) nav.push(Markup.button.callback(text.next, callback(state, `op:${screen.orderPage + 1}`)));
         if (nav.length) buttons.push(nav);
+        if (items.length && !screen.copying) buttons.push([Markup.button.callback(text.orderConfirm, callback(state, 'checklist'))]);
         buttons.push([Markup.button.callback(text.orderAdd, callback(state, 'orderAdd')), Markup.button.callback(text.orderEdit, callback(state, 'orderEdit'))]);
         if (complete) {
           if (complete.length <= 256) {
@@ -76,6 +77,19 @@ export function registerSupplierMenu(bot: Telegraf, repository: SupplierReposito
           } else if (!screen.copying) buttons.push([Markup.button.callback(text.orderCopy, callback(state, 'orderCopy'))]);
         }
         buttons.push([Markup.button.callback(text.back, callback(state, screen.copying ? 'order' : 'workspace'))]);
+      } else if (screen.kind === 'checklist') {
+        const items = orders.list(screen.id);
+        screen.checkPage = Math.max(0, Math.min(screen.checkPage, Math.max(0, Math.ceil(items.length / 10) - 1)));
+        boldName = supplier.name.slice(0, 200);
+        message = `${boldName}\n\n${text.orderConfirm}\n${text.selected}: ${screen.selectedIds.length} / ${screen.itemIds.length}`;
+        const chosen = new Set(screen.selectedIds);
+        buttons = items.slice(screen.checkPage * 10, (screen.checkPage + 1) * 10).map((item) => [Markup.button.callback(`${chosen.has(item.id) ? '✅' : '☐'} ${Array.from(item.text).slice(0, 70).join('')}`, callback(state, `toggle:${item.id}`))]);
+        const navigation = [];
+        if (screen.checkPage > 0) navigation.push(Markup.button.callback(text.previous, callback(state, `cp:${screen.checkPage - 1}`)));
+        if ((screen.checkPage + 1) * 10 < items.length) navigation.push(Markup.button.callback(text.next, callback(state, `cp:${screen.checkPage + 1}`)));
+        if (navigation.length) buttons.push(navigation);
+        buttons.push([Markup.button.callback(text.checkAll, callback(state, 'checkAll')), Markup.button.callback(text.clearAll, callback(state, 'clearAll'))]);
+        buttons.push([Markup.button.callback(text.submit, callback(state, 'submit')), Markup.button.callback(text.cancel, callback(state, 'order'))]);
       } else if (screen.kind === 'orderInput') {
         message = screen.operation === 'append' ? text.orderPromptAdd : text.orderPromptEdit;
         if (screen.operation === 'replace') buttons.push([Markup.button.callback(text.orderClear, callback(state, 'orderClear'))]);
@@ -152,7 +166,34 @@ export function registerSupplierMenu(bot: Telegraf, repository: SupplierReposito
     else if (action === 'search' && screen.kind === 'list') next = { kind: 'search' };
     else if (action === 'info' && (screen.kind === 'workspace' || screen.kind === 'edit')) next = { ...screen, kind: 'information' };
     else if (action === 'workspace' && (screen.kind === 'information' || screen.kind === 'confirmArchive' || screen.kind === 'order')) next = workspace(screen);
-    else if (action === 'order' && (screen.kind === 'workspace' || screen.kind === 'orderInput' || screen.kind === 'order')) next = { ...screen, kind: 'order', orderPage: 0, copying: false };
+    else if (action === 'order' && (screen.kind === 'workspace' || screen.kind === 'orderInput' || screen.kind === 'order' || screen.kind === 'checklist')) next = { ...screen, kind: 'order', orderPage: 0, copying: false };
+    else if (screen.kind === 'order' && action === 'checklist') {
+      const itemIds = orders.list(screen.id).map((item) => item.id);
+      if (itemIds.length) next = { ...screen, kind: 'checklist', checkPage: 0, itemIds, selectedIds: [] };
+    }
+    else if (screen.kind === 'checklist') {
+      const currentIds = orders.list(screen.id).map((item) => item.id);
+      if (currentIds.length !== screen.itemIds.length || currentIds.some((id, index) => id !== screen.itemIds[index])) {
+        next = { ...screen, kind: 'order', orderPage: 0 }; prefix = `${text.orderChanged}\n\n`;
+      } else if (/^toggle:[1-9]\d*$/.test(action)) {
+        const id = Number(action.slice(7));
+        if (screen.itemIds.slice(screen.checkPage * 10, (screen.checkPage + 1) * 10).includes(id)) {
+          const selected = new Set(screen.selectedIds);
+          if (selected.has(id)) selected.delete(id); else selected.add(id);
+          next = { ...screen, selectedIds: [...selected] };
+        }
+      } else if (/^cp:\d+$/.test(action)) {
+        const page = Number(action.slice(3));
+        if (Number.isSafeInteger(page) && page < Math.ceil(screen.itemIds.length / 10) && Math.abs(page - screen.checkPage) === 1) next = { ...screen, checkPage: page };
+      } else if (action === 'checkAll') next = { ...screen, selectedIds: [...screen.itemIds] };
+      else if (action === 'clearAll') next = { ...screen, selectedIds: [] };
+      else if (action === 'submit') {
+        if (!screen.selectedIds.length) { await ctx.answerCbQuery(text.noSelection); return; }
+        try { const count = orders.confirm(screen.id, screen.selectedIds, screen.itemIds); prefix = `${text.moved}: ${count}\n\n`; }
+        catch (error) { if (!(error instanceof OrderChangedError)) throw error; prefix = `${text.orderChanged}\n\n`; }
+        next = { ...screen, kind: 'order', orderPage: 0 };
+      }
+    }
     else if (screen.kind === 'order' && (action === 'orderAdd' || action === 'orderEdit')) next = { ...screen, kind: 'orderInput', operation: action === 'orderAdd' ? 'append' : 'replace' };
     else if (screen.kind === 'order' && action === 'orderCopy' && orders.list(screen.id).map((item) => item.text).join('\n').length > 256) next = { ...screen, copying: true, orderPage: 0 };
     else if (screen.kind === 'order' && /^op:\d+$/.test(action)) {

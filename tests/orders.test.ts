@@ -66,3 +66,44 @@ test('accepts realistic quoted product descriptions and rejects control characte
     }
   } finally { db.close(); }
 });
+
+test('confirms selected items atomically and rejects stale or cross-supplier selections', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'waiting-'));
+  const path = join(dir, 'data.sqlite');
+  let db = openDatabase(path);
+  try {
+    const suppliers = new SupplierRepository(db);
+    const a = suppliers.create({ name: 'A' });
+    const b = suppliers.create({ name: 'B' });
+    let orders = new OrderRepository(db);
+    orders.append(a.id, ['one', 'two', 'three']);
+    orders.append(b.id, ['other']);
+    const items = orders.list(a.id);
+    const ids = items.map((item) => item.id);
+    const foreign = orders.list(b.id)[0]!.id;
+    assert.throws(() => orders.confirm(a.id, [foreign], ids));
+    assert.throws(() => orders.confirm(a.id, [ids[0]!, ids[0]!], ids));
+    orders.append(a.id, ['concurrent']);
+    assert.throws(() => orders.confirm(a.id, [ids[0]!], ids), /Order changed/);
+    db.prepare('DELETE FROM order_items WHERE supplier_id = ? AND text = ?').run(a.id, 'concurrent');
+    db.exec("CREATE TRIGGER fail_wait BEFORE INSERT ON waiting_items WHEN NEW.text = 'three' BEGIN SELECT RAISE(ABORT, 'failure'); END");
+    assert.throws(() => orders.confirm(a.id, [ids[0]!, ids[2]!], ids));
+    assert.equal(orders.list(a.id).length, 3);
+    assert.equal(db.prepare('SELECT count(*) AS n FROM waiting_items').get()?.n, 0);
+    db.exec('DROP TRIGGER fail_wait');
+    assert.equal(orders.confirm(a.id, [ids[0]!, ids[2]!], ids), 2);
+    assert.deepEqual(orders.list(a.id).map((item) => item.text), ['two']);
+    assert.throws(() => orders.confirm(a.id, [ids[0]!], ids));
+    const waiting = db.prepare('SELECT id, text, confirmed_at FROM waiting_items WHERE supplier_id = ? ORDER BY position').all(a.id);
+    assert.deepEqual(waiting.map((item) => item.id), [ids[0], ids[2]]);
+    assert.ok(waiting.every((item) => item.confirmed_at));
+    assert.equal(orders.list(b.id).length, 1);
+    const remaining = orders.list(a.id).map((item) => item.id);
+    orders.confirm(a.id, remaining, remaining);
+    db.close();
+    db = openDatabase(path);
+    orders = new OrderRepository(db);
+    assert.equal(orders.list(a.id).length, 0);
+    assert.equal(db.prepare('SELECT count(*) AS n FROM waiting_items WHERE supplier_id = ?').get(a.id)?.n, 3);
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
