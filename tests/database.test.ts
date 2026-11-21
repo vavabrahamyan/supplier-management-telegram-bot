@@ -23,7 +23,7 @@ test('initializes directories and repeatable migrations with foreign keys enable
     assert.throws(() => db.prepare('INSERT INTO child VALUES (?)').run(999));
     db.close();
     const reopened = openDatabase(path);
-    try { assert.equal(reopened.prepare('SELECT count(*) AS count FROM schema_migrations').get()?.count, 5); }
+    try { assert.equal(reopened.prepare('SELECT count(*) AS count FROM schema_migrations').get()?.count, 6); }
     finally { reopened.close(); }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
@@ -110,7 +110,7 @@ test('upgrades a version 2 database without changing existing supplier data', ()
   try {
     const db = openDatabase(path);
     try {
-      assert.deepEqual(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all().map((row) => row.version), [1, 2, 3, 4, 5]);
+      assert.deepEqual(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all().map((row) => row.version), [1, 2, 3, 4, 5, 6]);
       const supplier = new SupplierRepository(db).getById(42);
       assert.equal(supplier?.name, 'Existing');
       assert.equal(supplier?.phone, '012345678');
@@ -139,7 +139,7 @@ test('upgrades a version 3 database without altering existing order items', () =
     const upgraded = openDatabase(path);
     try {
       assert.deepEqual(new OrderRepository(upgraded).list(supplier.id)[0], before);
-      assert.equal(upgraded.prepare('SELECT count(*) AS n FROM schema_migrations').get()?.n, 5);
+      assert.equal(upgraded.prepare('SELECT count(*) AS n FROM schema_migrations').get()?.n, 6);
       assert.equal(upgraded.prepare('SELECT count(*) AS n FROM waiting_items').get()?.n, 0);
     } finally { upgraded.close(); }
   } finally { rmSync(directory, { recursive: true, force: true }); }
@@ -159,7 +159,7 @@ test('upgrades a version 4 database preserving waiting data', () => {
     const upgraded = openDatabase(path);
     try {
       assert.deepEqual(upgraded.prepare('SELECT * FROM waiting_items').get(), before);
-      assert.equal(upgraded.prepare('SELECT count(*) AS n FROM schema_migrations').get()?.n, 5);
+      assert.equal(upgraded.prepare('SELECT count(*) AS n FROM schema_migrations').get()?.n, 6);
       assert.equal(upgraded.prepare('SELECT count(*) AS n FROM item_history').get()?.n, 0);
     } finally { upgraded.close(); }
   } finally { rmSync(directory, { recursive: true, force: true }); }
@@ -188,4 +188,22 @@ test('matches ordered word prefixes without losing literal substring search', ()
     assert.deepEqual(suppliers.searchByName('unknown'), []);
     assert.deepEqual(suppliers.searchByName('gar').map((supplier) => supplier.name), ['Garik Tec', 'Tec Garik']);
   } finally { db.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('upgrades version 5 while preserving supplier and business data', () => {
+  const { directory, path, db } = temporaryDatabase();
+  try {
+    const supplier = new SupplierRepository(db).create({ name: 'Existing note supplier' });
+    const orders = new OrderRepository(db); orders.append(supplier.id, ['Existing item']);
+    const before = orders.list(supplier.id);
+    db.exec('DROP TABLE supplier_notes; DELETE FROM schema_migrations WHERE version = 6');
+    db.close();
+    const upgraded = openDatabase(path);
+    try {
+      assert.equal(new SupplierRepository(upgraded).getById(supplier.id)?.name, 'Existing note supplier');
+      assert.deepEqual(new OrderRepository(upgraded).list(supplier.id), before);
+      assert.equal(upgraded.prepare('SELECT count(*) AS n FROM supplier_notes').get()?.n, 0);
+      assert.equal(upgraded.prepare('SELECT count(*) AS n FROM schema_migrations').get()?.n, 6);
+    } finally { upgraded.close(); }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });

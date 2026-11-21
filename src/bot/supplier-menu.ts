@@ -1,5 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { Markup, type Context, type Telegraf } from 'telegraf';
+import { NoteChangedError, InvalidNoteError, type NoteRepository } from '../features/notes/note.repository.ts';
+import { notePages } from '../features/notes/note.ts';
 import { WaitingChangedError, OrderCapacityError, type WaitingRepository } from '../features/waiting/waiting.repository.ts';
 import { OrderChangedError, type OrderRepository } from '../features/orders/order.repository.ts';
 import { orderPages, parseOrderItems } from '../features/orders/order.ts';
@@ -17,7 +19,7 @@ const weekdays = ['Ամեն երկուշաբթի', 'Ամեն երեքշաբթի'
 const prompts: Record<SupplierField, string> = { name: 'Մուտքագրեք նոր անվանումը։', phone: 'Մուտքագրեք նոր հեռախոսահամար(ներ)', website: 'Մուտքագրեք նոր կայք', address: 'Մուտքագրեք նոր հասցեն։', productTypes: 'Ընտրեք ապրանքատեսակը։', orderDays: 'Ընտրեք պատվերի օրերը։', deliveryDays: 'Ընտրեք առաքման օրերը։', workingHours: 'Մուտքագրեք նոր աշխատանքային ժամերը՝ ԺԺ:ՐՐ-ԺԺ:ՐՐ։', paymentTerms: 'Ընտրեք վճարման եղանակը։', generalInformation: 'Մուտքագրեք նոր ընդհանուր տեղեկությունը։' };
 const details = ['phone', 'website', 'address', 'productTypes', 'orderDays', 'deliveryDays', 'workingHours', 'paymentTerms', 'generalInformation'] as const;
 
-export function registerSupplierMenu(bot: Telegraf, repository: SupplierRepository, orders: OrderRepository, waiting: WaitingRepository): void {
+export function registerSupplierMenu(bot: Telegraf, repository: SupplierRepository, orders: OrderRepository, waiting: WaitingRepository, notes: NoteRepository): void {
   const sessions = new Map<string, Interaction>();
   const sessionKey = (ctx: Context) => `${ctx.chat!.id}:${ctx.from!.id}`;
   const list = (query?: string) => query === undefined ? repository.listActive() : repository.searchByName(query);
@@ -55,7 +57,34 @@ export function registerSupplierMenu(bot: Telegraf, repository: SupplierReposito
         const information = details.flatMap((field) => supplier[field] ? [`${text[field]}: ${supplier[field]}`] : []).join('\n');
         message = supplier.name + (information ? `\n\n${information}` : '');
         boldName = supplier.name;
-        buttons = [[Markup.button.callback(`${text.order} (${orders.list(screen.id).length})`, callback(state, 'order')), Markup.button.callback(`${text.waiting} (${waiting.list(screen.id).length})`, callback(state, 'waiting'))], [Markup.button.callback(text.information, callback(state, 'info')), Markup.button.callback(text.archive, callback(state, 'archive'))], [Markup.button.callback(text.back, callback(state, 'back'))]];
+        buttons = [[Markup.button.callback(`${text.order} (${orders.list(screen.id).length})`, callback(state, 'order')), Markup.button.callback(`${text.waiting} (${waiting.list(screen.id).length})`, callback(state, 'waiting'))], [Markup.button.callback(`${text.notes} (${notes.active(screen.id) ? text.noteActive : text.noteNone})`, callback(state, 'notes'))], [Markup.button.callback(text.information, callback(state, 'info')), Markup.button.callback(text.archive, callback(state, 'archive'))], [Markup.button.callback(text.back, callback(state, 'back'))]];
+      } else if (screen.kind === 'note' || screen.kind === 'noteDone' || screen.kind === 'noteInput') {
+        const note = notes.active(screen.id);
+        boldName = supplier.name.slice(0, 200);
+        if (screen.kind === 'note') {
+          const pages = notePages(note?.text ?? '');
+          screen.notePage = Math.max(0, Math.min(screen.notePage, Math.max(0, pages.length - 1)));
+          const part = pages[screen.notePage];
+          message = `${boldName}\n\n${text.notes}\n\n${screen.copying ? `${text.noteCopyHint}\n\n` : ''}${part ?? text.noteEmpty}`;
+          if (screen.copying && part) { codeOffset = prefix.length + message.length - part.length; codeLength = part.length; }
+          const nav = [];
+          if (screen.notePage > 0) nav.push(Markup.button.callback(text.previous, callback(state, `np:${screen.notePage - 1}`)));
+          if (screen.notePage + 1 < pages.length) nav.push(Markup.button.callback(text.next, callback(state, `np:${screen.notePage + 1}`)));
+          if (nav.length) buttons.push(nav);
+          buttons.push([Markup.button.callback(text.noteAdd, callback(state, 'noteAdd'))]);
+          if (note) {
+            if (note.text.length <= 256) buttons.push([{ text: text.noteCopy, copy_text: { text: note.text } } as unknown as ReturnType<typeof Markup.button.callback>]);
+            else if (!screen.copying) buttons.push([Markup.button.callback(text.noteCopy, callback(state, 'noteCopy'))]);
+            buttons.push([Markup.button.callback(text.noteEdit, callback(state, 'noteEdit'))], [Markup.button.callback(text.noteDone, callback(state, 'noteDone'))]);
+          }
+          buttons.push([Markup.button.callback(text.back, callback(state, screen.copying ? 'notesBack' : 'workspace'))]);
+        } else if (screen.kind === 'noteDone') {
+          message = `${boldName}\n\n${text.noteDonePrompt}`;
+          buttons = [[Markup.button.callback(text.noteDoneConfirm, callback(state, 'noteComplete'))], [Markup.button.callback(text.cancel, callback(state, 'notesBack'))]];
+        } else {
+          message = `${boldName}\n\n${screen.operation === 'append' ? text.noteAppendPrompt : text.noteReplacePrompt}`;
+          buttons = [[Markup.button.callback(text.cancel, callback(state, 'notesBack'))]];
+        }
       } else if (screen.kind === 'waiting' || screen.kind === 'waitingRemove') {
         const items = waiting.list(screen.id);
         screen.waitingPage = Math.max(0, Math.min(screen.waitingPage, Math.max(0, Math.ceil(items.length / 10) - 1)));
@@ -149,7 +178,7 @@ export function registerSupplierMenu(bot: Telegraf, repository: SupplierReposito
     if (prefix.trim()) addEntity(entities, 'bold', 0, prefix.trimEnd());
     if (boldName) {
       addEntity(entities, 'bold', prefix.length, boldName);
-      const heading = screen.kind === 'order' ? text.order : screen.kind === 'checklist' ? text.orderConfirm : screen.kind === 'waiting' && screen.itemIds.length ? text.waiting : undefined;
+      const heading = screen.kind === 'order' ? text.order : screen.kind === 'checklist' ? text.orderConfirm : screen.kind === 'waiting' && screen.itemIds.length ? text.waiting : screen.kind === 'note' ? text.notes : undefined;
       if (heading) addEntity(entities, 'bold', prefix.length + boldName.length + 2, heading);
     } else if (screen.kind === 'list') {
       const heading = message.includes('։') ? message.slice(0, message.indexOf('։') + 1) : message;
@@ -199,7 +228,31 @@ export function registerSupplierMenu(bot: Telegraf, repository: SupplierReposito
     else if (action === 'add' && screen.kind === 'list' && (screen.query === undefined || list(screen.query).length === 0)) next = { kind: 'add' };
     else if (action === 'search' && screen.kind === 'list') next = { kind: 'search' };
     else if (action === 'info' && (screen.kind === 'workspace' || screen.kind === 'edit')) next = { ...screen, kind: 'information' };
-    else if (action === 'workspace' && (screen.kind === 'information' || screen.kind === 'confirmArchive' || screen.kind === 'order' || screen.kind === 'waiting')) next = workspace(screen);
+    else if (action === 'workspace' && (screen.kind === 'information' || screen.kind === 'confirmArchive' || screen.kind === 'order' || screen.kind === 'waiting' || screen.kind === 'note')) next = workspace(screen);
+    else if (action === 'notes' && screen.kind === 'workspace') {
+      const current = notes.active(screen.id);
+      next = { ...screen, kind: 'note', notePage: 0, version: current ? { id: current.id, revision: current.revision } : null };
+    }
+    else if (screen.kind === 'note' || screen.kind === 'noteDone' || screen.kind === 'noteInput') {
+      const current = notes.active(screen.id);
+      const version = current ? { id: current.id, revision: current.revision } : null;
+      if (version?.id !== screen.version?.id || version?.revision !== screen.version?.revision) {
+        next = { ...screen, kind: 'note', notePage: 0, version }; prefix = `${text.noteChanged}\n\n`;
+      } else if (action === 'notesBack') next = { ...screen, kind: 'note', notePage: 0, copying: false, version };
+      else if (screen.kind === 'note' && (action === 'noteAdd' || (action === 'noteEdit' && current))) next = { ...screen, kind: 'noteInput', operation: action === 'noteAdd' ? 'append' : 'replace' };
+      else if (screen.kind === 'note' && current && action === 'noteDone') next = { ...screen, kind: 'noteDone', version: version! };
+      else if (screen.kind === 'noteDone' && action === 'noteComplete') {
+        try { notes.complete(screen.id, screen.version); prefix = `${text.noteCompleted}\n\n`; }
+        catch (error) { if (!(error instanceof NoteChangedError)) throw error; prefix = `${text.noteChanged}\n\n`; }
+        const updated = notes.active(screen.id);
+        next = { ...screen, kind: 'note', notePage: 0, version: updated ? { id: updated.id, revision: updated.revision } : null };
+      }
+      else if (screen.kind === 'note' && current && action === 'noteCopy' && current.text.length > 256) next = { ...screen, copying: true, notePage: 0 };
+      else if (screen.kind === 'note' && /^np:\d+$/.test(action)) {
+        const page = Number(action.slice(3));
+        if (Number.isSafeInteger(page) && page < notePages(current?.text ?? '').length && Math.abs(page - screen.notePage) === 1) next = { ...screen, notePage: page };
+      }
+    }
     else if (action === 'waiting' && screen.kind === 'workspace') next = { ...screen, kind: 'waiting', waitingPage: 0, itemIds: waiting.list(screen.id).map((item) => item.id), selectedIds: [] };
     else if (screen.kind === 'waiting' || screen.kind === 'waitingRemove') {
       const currentIds = waiting.list(screen.id).map((item) => item.id);
@@ -306,13 +359,29 @@ export function registerSupplierMenu(bot: Telegraf, repository: SupplierReposito
   });
   bot.on('text', async (ctx, nextHandler) => {
     const state = sessions.get(sessionKey(ctx));
-    if (!state || (state.screen.kind !== 'add' && state.screen.kind !== 'search' && state.screen.kind !== 'edit' && state.screen.kind !== 'orderInput')) return nextHandler();
+    if (!state || (state.screen.kind !== 'add' && state.screen.kind !== 'search' && state.screen.kind !== 'edit' && state.screen.kind !== 'orderInput' && state.screen.kind !== 'noteInput')) return nextHandler();
     if (ctx.message.text.startsWith('/')) return nextHandler();
     const value = ctx.message.text.trim();
     if (!value) { await ctx.reply(text.invalid); return; }
     if (state.screen.kind === 'search') {
       sessions.delete(sessionKey(ctx));
       await render(ctx, { kind: 'list', page: 0, query: value });
+      return;
+    }
+    if (state.screen.kind === 'noteInput') {
+      const screen = state.screen;
+      try { notes.save(screen.id, ctx.message.text, screen.operation, screen.version); }
+      catch (error) {
+        if (error instanceof InvalidNoteError) { await ctx.reply(text.noteInvalid); return; }
+        if (!(error instanceof NoteChangedError)) throw error;
+        const current = notes.active(screen.id);
+        sessions.delete(sessionKey(ctx));
+        await render(ctx, { ...screen, kind: 'note', notePage: 0, version: current ? { id: current.id, revision: current.revision } : null }, false, `${text.noteChanged}\n\n`);
+        return;
+      }
+      const current = notes.active(screen.id)!;
+      sessions.delete(sessionKey(ctx));
+      await render(ctx, { ...screen, kind: 'note', notePage: 0, version: { id: current.id, revision: current.revision } }, false, `${text.saved}\n\n`);
       return;
     }
     if (state.screen.kind === 'orderInput') {

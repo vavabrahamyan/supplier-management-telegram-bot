@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { NoteRepository } from '../src/features/notes/note.repository.ts';
 import { WaitingRepository } from '../src/features/waiting/waiting.repository.ts';
 import { OrderRepository } from '../src/features/orders/order.repository.ts';
 import { createBot } from '../src/bot/bot.ts';
@@ -10,7 +11,7 @@ import { SupplierRepository } from '../src/features/suppliers/supplier.repositor
 
 test('only authorized users receive the start response', async () => {
   const db = openDatabase(':memory:');
-  const bot = createBot(loadConfig({ BOT_TOKEN: 'test-token', ALLOWED_TELEGRAM_USERNAMES: '@Alice' }), createLogger('error'), new SupplierRepository(db), new OrderRepository(db), new WaitingRepository(db));
+  const bot = createBot(loadConfig({ BOT_TOKEN: 'test-token', ALLOWED_TELEGRAM_USERNAMES: '@Alice' }), createLogger('error'), new SupplierRepository(db), new OrderRepository(db), new WaitingRepository(db), new NoteRepository(db));
   bot.botInfo = { id: 1, is_bot: true, first_name: 'Test', username: 'test_bot', can_join_groups: false, can_read_all_group_messages: false, supports_inline_queries: false };
   const replies: unknown[] = [];
   const prototype = Object.getPrototypeOf(bot.telegram) as typeof bot.telegram;

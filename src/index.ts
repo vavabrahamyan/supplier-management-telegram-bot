@@ -3,6 +3,7 @@ import { createBot } from './bot/bot.ts';
 import { loadConfig } from './config/config.ts';
 import { createLogger } from './utils/logger.ts';
 import { openDatabase } from './db/database.ts';
+import { NoteRepository } from './features/notes/note.repository.ts';
 import { WaitingRepository } from './features/waiting/waiting.repository.ts';
 import { OrderRepository } from './features/orders/order.repository.ts';
 import { SupplierRepository } from './features/suppliers/supplier.repository.ts';
@@ -11,7 +12,7 @@ async function main(): Promise<void> {
   const config = loadConfig(process.env);
   const logger = createLogger(config.logLevel);
   const db = openDatabase(config.databasePath);
-  const bot = createBot(config, logger, new SupplierRepository(db), new OrderRepository(db), new WaitingRepository(db));
+  const bot = createBot(config, logger, new SupplierRepository(db), new OrderRepository(db), new WaitingRepository(db), new NoteRepository(db));
   // launch resolves when polling stops, so register signal handlers first.
   let stopping = false;
   const shutdown = (signal: string): void => {

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { NoteRepository } from '../src/features/notes/note.repository.ts';
 import { WaitingRepository } from '../src/features/waiting/waiting.repository.ts';
 import { OrderRepository } from '../src/features/orders/order.repository.ts';
 import { createBot } from '../src/bot/bot.ts';
@@ -15,7 +16,7 @@ test('supplier menu creation, search, navigation, stale buttons and authorizatio
   const directory = mkdtempSync(join(tmpdir(), 'supplier-menu-'));
   const db = openDatabase(join(directory, 'test.sqlite'));
   const repo = new SupplierRepository(db);
-  const bot = createBot(loadConfig({ BOT_TOKEN: 'fake', ALLOWED_TELEGRAM_USERNAMES: 'Alice' }), createLogger('error'), repo, new OrderRepository(db), new WaitingRepository(db));
+  const bot = createBot(loadConfig({ BOT_TOKEN: 'fake', ALLOWED_TELEGRAM_USERNAMES: 'Alice' }), createLogger('error'), repo, new OrderRepository(db), new WaitingRepository(db), new NoteRepository(db));
   bot.botInfo = { id: 1, is_bot: true, first_name: 'Test', username: 'test_bot', can_join_groups: false, can_read_all_group_messages: false, supports_inline_queries: false };
   const calls: { method: string; payload: any }[] = [];
   let messageId = 10;

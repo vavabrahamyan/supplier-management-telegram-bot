@@ -60,6 +60,16 @@ const migrations = [
     returned_order_id INTEGER
   );
   CREATE INDEX item_history_supplier ON item_history(supplier_id, occurred_at, id);`,
+  `CREATE TABLE supplier_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
+    text TEXT NOT NULL CHECK(length(trim(text)) > 0),
+    revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    completed_at TEXT
+  );
+  CREATE UNIQUE INDEX supplier_notes_active ON supplier_notes(supplier_id) WHERE completed_at IS NULL;`,
 ];
 
 export function openDatabase(path: string): DatabaseSync {
