@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { Markup, type Context, type Telegraf } from 'telegraf';
+import { WaitingChangedError, OrderCapacityError, type WaitingRepository } from '../features/waiting/waiting.repository.ts';
 import { OrderChangedError, type OrderRepository } from '../features/orders/order.repository.ts';
 import { orderPages, parseOrderItems } from '../features/orders/order.ts';
 import type { SupplierRepository } from '../features/suppliers/supplier.repository.ts';
@@ -15,7 +16,7 @@ const weekdays = ['Ամեն երկուշաբթի', 'Ամեն երեքշաբթի'
 const prompts: Record<SupplierField, string> = { name: 'Մուտքագրեք նոր անվանումը։', phone: 'Մուտքագրեք նոր հեռախոսահամար(ներ)', website: 'Մուտքագրեք նոր կայք', address: 'Մուտքագրեք նոր հասցեն։', productTypes: 'Ընտրեք ապրանքատեսակը։', orderDays: 'Ընտրեք պատվերի օրերը։', deliveryDays: 'Ընտրեք առաքման օրերը։', workingHours: 'Մուտքագրեք նոր աշխատանքային ժամերը՝ ԺԺ:ՐՐ-ԺԺ:ՐՐ։', paymentTerms: 'Ընտրեք վճարման եղանակը։', generalInformation: 'Մուտքագրեք նոր ընդհանուր տեղեկությունը։' };
 const details = ['phone', 'website', 'address', 'productTypes', 'orderDays', 'deliveryDays', 'workingHours', 'paymentTerms', 'generalInformation'] as const;
 
-export function registerSupplierMenu(bot: Telegraf, repository: SupplierRepository, orders: OrderRepository): void {
+export function registerSupplierMenu(bot: Telegraf, repository: SupplierRepository, orders: OrderRepository, waiting: WaitingRepository): void {
   const sessions = new Map<string, Interaction>();
   const sessionKey = (ctx: Context) => `${ctx.chat!.id}:${ctx.from!.id}`;
   const list = (query?: string) => query === undefined ? repository.listActive() : repository.searchByName(query);
@@ -53,7 +54,28 @@ export function registerSupplierMenu(bot: Telegraf, repository: SupplierReposito
         const information = details.flatMap((field) => supplier[field] ? [`${text[field]}: ${supplier[field]}`] : []).join('\n');
         message = supplier.name + (information ? `\n\n${information}` : '');
         boldName = supplier.name;
-        buttons = [[Markup.button.callback(`${text.order} (${orders.list(screen.id).length})`, callback(state, 'order'))], [Markup.button.callback(text.information, callback(state, 'info')), Markup.button.callback(text.archive, callback(state, 'archive'))], [Markup.button.callback(text.back, callback(state, 'back'))]];
+        buttons = [[Markup.button.callback(`${text.order} (${orders.list(screen.id).length})`, callback(state, 'order')), Markup.button.callback(`${text.waiting} (${waiting.list(screen.id).length})`, callback(state, 'waiting'))], [Markup.button.callback(text.information, callback(state, 'info')), Markup.button.callback(text.archive, callback(state, 'archive'))], [Markup.button.callback(text.back, callback(state, 'back'))]];
+      } else if (screen.kind === 'waiting' || screen.kind === 'waitingRemove') {
+        const items = waiting.list(screen.id);
+        screen.waitingPage = Math.max(0, Math.min(screen.waitingPage, Math.max(0, Math.ceil(items.length / 10) - 1)));
+        boldName = supplier.name.slice(0, 200);
+        message = `${boldName}\n\n${screen.kind === 'waitingRemove' ? text.confirmRemoveWaiting : items.length ? `${text.waiting}\n${text.selected}: ${screen.selectedIds.length} / ${items.length}` : text.waitingEmpty}`;
+        if (screen.kind === 'waitingRemove') {
+          buttons = [[Markup.button.callback(text.confirmRemove, callback(state, 'wConfirmRemove')), Markup.button.callback(text.cancel, callback(state, 'wCancelRemove'))]];
+        } else {
+          const chosen = new Set(screen.selectedIds);
+          buttons = items.slice(screen.waitingPage * 10, (screen.waitingPage + 1) * 10).map((item) => [Markup.button.callback(`${chosen.has(item.id) ? '✅' : '☐'} ${Array.from(item.text).slice(0, 70).join('')}`, callback(state, `wt:${item.id}`))]);
+          const nav = [];
+          if (screen.waitingPage > 0) nav.push(Markup.button.callback(text.previous, callback(state, `wp:${screen.waitingPage - 1}`)));
+          if ((screen.waitingPage + 1) * 10 < items.length) nav.push(Markup.button.callback(text.next, callback(state, `wp:${screen.waitingPage + 1}`)));
+          if (nav.length) buttons.push(nav);
+          if (items.length) {
+            buttons.push([Markup.button.callback(text.checkAll, callback(state, 'wAll')), Markup.button.callback(text.clearAll, callback(state, 'wNone'))]);
+            buttons.push([Markup.button.callback(text.receive, callback(state, 'wReceive')), Markup.button.callback(text.returnOrder, callback(state, 'wReturn'))]);
+            buttons.push([Markup.button.callback(text.removeWaiting, callback(state, 'wRemove'))]);
+          }
+          buttons.push([Markup.button.callback(text.cancel, callback(state, 'workspace'))]);
+        }
       } else if (screen.kind === 'order') {
         const items = orders.list(screen.id).map((item) => item.text);
         const complete = items.join('\n');
@@ -165,7 +187,42 @@ export function registerSupplierMenu(bot: Telegraf, repository: SupplierReposito
     else if (action === 'add' && screen.kind === 'list' && (screen.query === undefined || list(screen.query).length === 0)) next = { kind: 'add' };
     else if (action === 'search' && screen.kind === 'list') next = { kind: 'search' };
     else if (action === 'info' && (screen.kind === 'workspace' || screen.kind === 'edit')) next = { ...screen, kind: 'information' };
-    else if (action === 'workspace' && (screen.kind === 'information' || screen.kind === 'confirmArchive' || screen.kind === 'order')) next = workspace(screen);
+    else if (action === 'workspace' && (screen.kind === 'information' || screen.kind === 'confirmArchive' || screen.kind === 'order' || screen.kind === 'waiting')) next = workspace(screen);
+    else if (action === 'waiting' && screen.kind === 'workspace') next = { ...screen, kind: 'waiting', waitingPage: 0, itemIds: waiting.list(screen.id).map((item) => item.id), selectedIds: [] };
+    else if (screen.kind === 'waiting' || screen.kind === 'waitingRemove') {
+      const currentIds = waiting.list(screen.id).map((item) => item.id);
+      if (currentIds.length !== screen.itemIds.length || currentIds.some((id, index) => id !== screen.itemIds[index])) {
+        next = { ...screen, kind: 'waiting', waitingPage: 0, itemIds: currentIds, selectedIds: [] }; prefix = `${text.waitingChanged}\n\n`;
+      } else if (screen.kind === 'waitingRemove' && action === 'wCancelRemove') next = { ...screen, kind: 'waiting' };
+      else if (screen.kind === 'waiting' && /^wt:[1-9]\d*$/.test(action)) {
+        const id = Number(action.slice(3));
+        if (screen.itemIds.slice(screen.waitingPage * 10, (screen.waitingPage + 1) * 10).includes(id)) {
+          const selected = new Set(screen.selectedIds);
+          if (selected.has(id)) selected.delete(id); else selected.add(id);
+          next = { ...screen, selectedIds: [...selected] };
+        }
+      } else if (screen.kind === 'waiting' && /^wp:\d+$/.test(action)) {
+        const page = Number(action.slice(3));
+        if (Number.isSafeInteger(page) && page < Math.ceil(screen.itemIds.length / 10) && Math.abs(page - screen.waitingPage) === 1) next = { ...screen, waitingPage: page };
+      } else if (screen.kind === 'waiting' && action === 'wAll') next = { ...screen, selectedIds: [...screen.itemIds] };
+      else if (screen.kind === 'waiting' && action === 'wNone') next = { ...screen, selectedIds: [] };
+      else if ((screen.kind === 'waiting' && ['wReceive', 'wReturn', 'wRemove'].includes(action)) || (screen.kind === 'waitingRemove' && action === 'wConfirmRemove')) {
+        if (!screen.selectedIds.length) { await ctx.answerCbQuery(text.noSelection); return; }
+        if (action === 'wRemove') next = { ...screen, kind: 'waitingRemove' };
+        else {
+          const operation = action === 'wReceive' ? 'received' : action === 'wReturn' ? 'returned' : 'cancelled';
+          try {
+            const count = waiting.transition(screen.id, screen.selectedIds, screen.itemIds, operation);
+            prefix = `${operation === 'received' ? text.waitingReceived : operation === 'returned' ? text.waitingReturned : text.waitingCancelled}: ${count}\n\n`;
+          } catch (error) {
+            if (error instanceof OrderCapacityError) { await ctx.answerCbQuery(text.orderFull); return; }
+            if (!(error instanceof WaitingChangedError)) throw error;
+            prefix = `${text.waitingChanged}\n\n`;
+          }
+          next = { ...screen, kind: 'waiting', waitingPage: 0, itemIds: waiting.list(screen.id).map((item) => item.id), selectedIds: [] };
+        }
+      }
+    }
     else if (action === 'order' && (screen.kind === 'workspace' || screen.kind === 'orderInput' || screen.kind === 'order' || screen.kind === 'checklist')) next = { ...screen, kind: 'order', orderPage: 0, copying: false };
     else if (screen.kind === 'order' && action === 'checklist') {
       const itemIds = orders.list(screen.id).map((item) => item.id);

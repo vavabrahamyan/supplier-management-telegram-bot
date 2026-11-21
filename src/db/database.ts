@@ -48,6 +48,18 @@ const migrations = [
     confirmed_at TEXT NOT NULL,
     UNIQUE(supplier_id, position)
   );`,
+  `CREATE TABLE item_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
+    item_id INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    action TEXT NOT NULL CHECK(action IN ('received', 'returned', 'cancelled')),
+    created_at TEXT NOT NULL,
+    confirmed_at TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    returned_order_id INTEGER
+  );
+  CREATE INDEX item_history_supplier ON item_history(supplier_id, occurred_at, id);`,
 ];
 
 export function openDatabase(path: string): DatabaseSync {

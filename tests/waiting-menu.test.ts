@@ -1,0 +1,57 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { openDatabase } from '../src/db/database.ts';
+import { SupplierRepository } from '../src/features/suppliers/supplier.repository.ts';
+import { OrderRepository } from '../src/features/orders/order.repository.ts';
+import { WaitingRepository } from '../src/features/waiting/waiting.repository.ts';
+import { createBot } from '../src/bot/bot.ts';
+import { loadConfig } from '../src/config/config.ts';
+import { createLogger } from '../src/utils/logger.ts';
+
+test('waiting checklist paginates, confirms removals and handles stale actions', async () => {
+  const db = openDatabase(':memory:');
+  const suppliers = new SupplierRepository(db);
+  const orders = new OrderRepository(db);
+  const waiting = new WaitingRepository(db);
+  const supplier = suppliers.create({ name: 'A' });
+  orders.append(supplier.id, Array.from({ length: 12 }, (_, i) => `Item ${i + 1}`));
+  const ids = orders.list(supplier.id).map((item) => item.id);
+  orders.confirm(supplier.id, ids, ids);
+  const bot = createBot(loadConfig({ BOT_TOKEN: 'fake', ALLOWED_TELEGRAM_USERNAMES: 'Alice' }), createLogger('error'), suppliers, orders, waiting);
+  bot.botInfo = { id: 1, is_bot: true, first_name: 'Test', username: 'test_bot', can_join_groups: false, can_read_all_group_messages: false, supports_inline_queries: false };
+  const calls: { method: string; payload: any }[] = [];
+  const proto = Object.getPrototypeOf(bot.telegram) as typeof bot.telegram;
+  const original = proto.callApi;
+  let msg = 10, update = 0;
+  proto.callApi = (async (method: string, payload: any) => { calls.push({ method, payload }); return method === 'sendMessage' ? { message_id: ++msg } : true; }) as typeof bot.telegram.callApi;
+  const chat = { id: 7, type: 'private' as const };
+  const from = { id: 7, is_bot: false, first_name: 'User', username: 'Alice' };
+  const start = async () => bot.handleUpdate({ update_id: ++update, message: { message_id: update, date: 0, chat, from, text: '/start', entities: [{ type: 'bot_command' as const, offset: 0, length: 6 }] } });
+  const latest = () => calls.filter((c) => c.method === 'sendMessage' || c.method === 'editMessageText').at(-1)!.payload;
+  const button = (label: string) => latest().reply_markup.inline_keyboard.flat().find((b: any) => b.text === label)?.callback_data as string;
+  const click = async (data: string) => bot.handleUpdate({ update_id: ++update, callback_query: { id: String(update), from, chat_instance: 'x', message: { message_id: msg, date: 0, chat }, data } });
+  try {
+    await start(); await click(button('A')); await click(button('⏳ Սպասում (12)'));
+    await click(button('☐ Item 1')); await click(button('➡️')); await click(button('☐ Item 11'));
+    assert.match(latest().text, /2 \/ 12/);
+    await click(button('✅ Ընտրել բոլորը')); assert.match(latest().text, /12 \/ 12/);
+    await click(button('☐ Մաքրել ընտրությունը')); assert.match(latest().text, /0 \/ 12/);
+    await click(button('⬅️')); await click(button('☐ Item 1')); await click(button('➡️')); await click(button('☐ Item 11'));
+    await click(button('📥 Ստանալ ընտրվածը'));
+    assert.equal(waiting.list(supplier.id).length, 10);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM item_history WHERE action = 'received'").get()?.n, 2);
+    await click(button('☐ Item 2')); await click(button('🗑 Հեռացնել ընտրվածը'));
+    await click(button('❌ Չեղարկել'));
+    assert.equal(waiting.list(supplier.id).length, 10);
+    await click(button('🗑 Հեռացնել ընտրվածը'));
+    const confirm = button('✅ Հեռացնել');
+    await click(confirm); assert.equal(waiting.list(supplier.id).length, 9);
+    await click(confirm); assert.match(calls.at(-1)?.payload.text, /ակտիվ չէ/);
+    await click(button('☐ Item 3')); await click(button('↩️ Վերադարձնել պատվեր'));
+    assert.equal(orders.list(supplier.id)[0]?.text, 'Item 3');
+    assert.equal(waiting.list(supplier.id).length, 8);
+    await click(button('☐ Item 4'));
+    const before = waiting.list(supplier.id).length;
+    await start(); assert.equal(waiting.list(supplier.id).length, before);
+  } finally { proto.callApi = original; db.close(); }
+});
