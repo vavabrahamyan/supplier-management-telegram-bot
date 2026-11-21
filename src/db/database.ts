@@ -70,6 +70,41 @@ const migrations = [
     completed_at TEXT
   );
   CREATE UNIQUE INDEX supplier_notes_active ON supplier_notes(supplier_id) WHERE completed_at IS NULL;`,
+  `CREATE TABLE drive_folders (
+    id INTEGER PRIMARY KEY,
+    supplier_id INTEGER REFERENCES suppliers(id),
+    kind TEXT NOT NULL CHECK(kind IN ('root', 'supplier', 'current', 'archive')),
+    drive_id TEXT NOT NULL UNIQUE,
+    CHECK ((kind = 'root' AND supplier_id IS NULL) OR (kind != 'root' AND supplier_id IS NOT NULL))
+  );
+  CREATE UNIQUE INDEX drive_root_folder ON drive_folders(kind) WHERE supplier_id IS NULL;
+  CREATE UNIQUE INDEX drive_supplier_folder ON drive_folders(supplier_id, kind) WHERE supplier_id IS NOT NULL;
+  CREATE TABLE price_lists (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  CREATE TABLE price_list_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    price_list_id INTEGER NOT NULL REFERENCES price_lists(id),
+    drive_file_id TEXT NOT NULL UNIQUE,
+    filename TEXT NOT NULL CHECK(length(filename) > 0),
+    uploaded_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    archived_at TEXT,
+    previous_version_id INTEGER REFERENCES price_list_versions(id)
+  );
+  CREATE UNIQUE INDEX price_list_active_version ON price_list_versions(price_list_id) WHERE archived_at IS NULL;
+  CREATE TABLE drive_operations (
+    id TEXT PRIMARY KEY,
+    supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
+    price_list_id INTEGER REFERENCES price_lists(id),
+    new_drive_file_id TEXT NOT NULL UNIQUE,
+    previous_version_id INTEGER REFERENCES price_list_versions(id),
+    filename TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('reserved', 'uploaded', 'committed', 'archived')),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  CREATE UNIQUE INDEX drive_one_pending_replacement ON drive_operations(price_list_id) WHERE price_list_id IS NOT NULL AND state != 'archived';`,
 ];
 
 export function openDatabase(path: string): DatabaseSync {

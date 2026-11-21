@@ -21,3 +21,6 @@ coverage/
 Thumbs.db
 .idea/
 .vscode/
+
+# Google OAuth credentials and tokens
+data/google-drive-token.json

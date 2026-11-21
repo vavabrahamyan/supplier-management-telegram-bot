@@ -34,3 +34,15 @@ Each supplier workspace has a persistent Order list. Add comma- or newline-separ
 The Order confirmation checklist keeps selections temporary until submission. Selected items move atomically to one supplier-specific Waiting list; unchecked items remain in Order. The Waiting checklist supports receiving, returning items to Order, and confirmed removal. Each action is recorded in history; history browsing is not implemented yet. Returned items receive new Order IDs, linked to the Waiting IDs in history.
 
 Each supplier can have one active combined note. Add text to append it with a newline, replace it through Edit, or mark it Done after confirmation; completed notes are retained for future History browsing. Notes can contain up to 100,000 UTF-16 code units. Longer notes are displayed and copied in pages; Telegram's single-message input limit applies when entering replacement text.
+
+## Google Drive setup (foundation only)
+
+Price-list upload and replacement are still under development and are not available in Telegram yet. The following prepares local OAuth credentials for that future integration:
+
+1. In [Google Cloud Console](https://console.cloud.google.com/), create or select a project and enable the Google Drive API.
+2. Configure the OAuth consent screen and add your Google account as a test user if the application is in testing mode.
+3. Create an OAuth client of type **Desktop app**. Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in `.env` to its client ID and secret.
+4. Run `npm run drive:auth` on the machine where you can open a browser. Open the displayed link, sign in as the Drive owner, and grant access. The helper listens on a temporary loopback port and saves the refresh token with owner-only file permissions at `./data/google-drive-token.json` by default. It refuses to overwrite an existing token file.
+5. Keep `.env` and the token file private. If `GOOGLE_TOKEN_PATH` is changed, ensure the new path is outside the repository or explicitly ignored, and accessible only to the bot user. Revoke access in your Google account if credentials are exposed.
+
+The requested `drive.file` scope grants access to files created or explicitly opened with the application, rather than the entire Drive. The OAuth token may expire or be revoked; reauthorization may be needed. No Drive data is accessed by the bot at this stage.
