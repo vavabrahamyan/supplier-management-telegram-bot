@@ -54,8 +54,20 @@ export class SupplierRepository {
 
   searchByName(query: string): Supplier[] {
     if (typeof query !== 'string' || !query.trim()) throw new TypeError('Search query is required');
-    return this.db.prepare('SELECT * FROM suppliers WHERE archived = 0 AND instr(name_key, ?) > 0 ORDER BY name_key, id')
-      .all(key(query.trim())).map(map);
+    const normalized = key(query.trim()).replace(/\s+/gu, ' ');
+    const terms = normalized.split(' ');
+    return this.listActive().filter((supplier) => {
+      const name = key(supplier.name).replace(/\s+/gu, ' ');
+      if (name.includes(normalized)) return true;
+      if (terms.length < 2) return false;
+      const words = name.split(/[^\p{L}\p{N}\p{M}]+/u).filter(Boolean);
+      let termIndex = 0;
+      for (const word of words) {
+        if (word.startsWith(terms[termIndex]!)) termIndex++;
+        if (termIndex === terms.length) return true;
+      }
+      return false;
+    });
   }
 
   update(id: number, input: SupplierUpdate): Supplier | undefined {

@@ -164,3 +164,28 @@ test('upgrades a version 4 database preserving waiting data', () => {
     } finally { upgraded.close(); }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
+
+
+test('matches ordered word prefixes without losing literal substring search', () => {
+  const { directory, db } = temporaryDatabase();
+  try {
+    const suppliers = new SupplierRepository(db);
+    const garik = suppliers.create({ name: 'Garik Tec' });
+    const unicode = suppliers.create({ name: 'ԱՎՏՈ Մասեր' });
+    const composed = suppliers.create({ name: 'Café Pièces' });
+    const reversed = suppliers.create({ name: 'Tec Garik' });
+    const archived = suppliers.create({ name: 'Garik Test' });
+    suppliers.archive(archived.id);
+    for (const query of ['Garik Tec', 'garik', 'GARI T', 'gari t', 'gar te', 'tec', '  GAR  \t te  ']) {
+      assert.ok(suppliers.searchByName(query).some((supplier) => supplier.id === garik.id), query);
+    }
+    assert.deepEqual(suppliers.searchByName('gari t').map((supplier) => supplier.id), [garik.id]);
+    assert.deepEqual(suppliers.searchByName('tec gar').map((supplier) => supplier.id), [reversed.id]);
+    assert.deepEqual(suppliers.searchByName('t g').map((supplier) => supplier.id), [reversed.id]);
+    assert.deepEqual(suppliers.searchByName('ԱՎ ՄԱ').map((supplier) => supplier.id), [unicode.id]);
+    assert.deepEqual(suppliers.searchByName('cafe\u0301 pi').map((supplier) => supplier.id), [composed.id]);
+    assert.deepEqual(suppliers.searchByName('arik te').map((supplier) => supplier.id), [garik.id]);
+    assert.deepEqual(suppliers.searchByName('unknown'), []);
+    assert.deepEqual(suppliers.searchByName('gar').map((supplier) => supplier.name), ['Garik Tec', 'Tec Garik']);
+  } finally { db.close(); rmSync(directory, { recursive: true, force: true }); }
+});
