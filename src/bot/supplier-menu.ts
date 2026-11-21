@@ -5,6 +5,7 @@ import { OrderChangedError, type OrderRepository } from '../features/orders/orde
 import { orderPages, parseOrderItems } from '../features/orders/order.ts';
 import type { SupplierRepository } from '../features/suppliers/supplier.repository.ts';
 import type { Supplier } from '../features/suppliers/supplier.types.ts';
+import { addEntity, compactRows, type TextEntity } from '../utils/telegram-format.ts';
 import { text } from '../texts/suppliers.ts';
 import type { Interaction, Screen, SupplierField } from './supplier-menu.types.ts';
 
@@ -45,7 +46,7 @@ export function registerSupplierMenu(bot: Telegraf, repository: SupplierReposito
         buttons.push(actions);
       } else {
         if (!suppliers.length) buttons.push([Markup.button.callback(text.add, callback(state, 'add'))]);
-        buttons.push([Markup.button.callback(text.back, callback(state, 'search')), Markup.button.callback(text.cancel, callback(state, 'home'))]);
+        buttons.push([Markup.button.callback(text.back, callback(state, 'search')), Markup.button.callback(text.home, callback(state, 'home'))]);
       }
     } else if ('id' in screen) {
       const supplier = repository.getById(screen.id);
@@ -74,7 +75,7 @@ export function registerSupplierMenu(bot: Telegraf, repository: SupplierReposito
             buttons.push([Markup.button.callback(text.receive, callback(state, 'wReceive')), Markup.button.callback(text.returnOrder, callback(state, 'wReturn'))]);
             buttons.push([Markup.button.callback(text.removeWaiting, callback(state, 'wRemove'))]);
           }
-          buttons.push([Markup.button.callback(text.cancel, callback(state, 'workspace'))]);
+          buttons.push([Markup.button.callback(screen.selectedIds.length ? text.cancel : text.backSupplier, callback(state, 'workspace'))]);
         }
       } else if (screen.kind === 'order') {
         const items = orders.list(screen.id).map((item) => item.text);
@@ -144,10 +145,21 @@ export function registerSupplierMenu(bot: Telegraf, repository: SupplierReposito
       message = screen.kind === 'add' ? text.addPrompt : text.searchPrompt;
       buttons = [[Markup.button.callback(text.cancel, callback(state, 'home'))]];
     }
-    const entities: ({ type: 'bold' | 'code'; offset: number; length: number })[] = [];
-    if (boldName) entities.push({ type: 'bold', offset: prefix.length, length: boldName.length });
-    if (codeOffset !== undefined) entities.push({ type: 'code', offset: codeOffset, length: codeLength });
-    const options = { ...Markup.inlineKeyboard(buttons), ...(entities.length ? { entities } : {}) };
+    const entities: TextEntity[] = [];
+    if (prefix.trim()) addEntity(entities, 'bold', 0, prefix.trimEnd());
+    if (boldName) {
+      addEntity(entities, 'bold', prefix.length, boldName);
+      const heading = screen.kind === 'order' ? text.order : screen.kind === 'checklist' ? text.orderConfirm : screen.kind === 'waiting' && screen.itemIds.length ? text.waiting : undefined;
+      if (heading) addEntity(entities, 'bold', prefix.length + boldName.length + 2, heading);
+    } else if (screen.kind === 'list') {
+      const heading = message.includes('։') ? message.slice(0, message.indexOf('։') + 1) : message;
+      addEntity(entities, 'bold', prefix.length, heading);
+    } else {
+      const title = screen.kind === 'search' ? text.searchTitle : screen.kind === 'add' ? text.addTitle : screen.kind === 'orderInput' ? text.orderInputTitle : screen.kind === 'edit' ? text.inputTitle : undefined;
+      if (title) { message = `${title}\n\n${message}`; addEntity(entities, 'bold', prefix.length, title); }
+    }
+    if (codeOffset !== undefined) addEntity(entities, 'code', codeOffset, message.slice(codeOffset - prefix.length, codeOffset - prefix.length + codeLength));
+    const options = { ...Markup.inlineKeyboard(compactRows(buttons)), ...(entities.length ? { entities } : {}) };
     if (edit && ctx.callbackQuery?.message && 'message_id' in ctx.callbackQuery.message) {
       await ctx.editMessageText(prefix + message, options);
       state.messageId = ctx.callbackQuery.message.message_id;

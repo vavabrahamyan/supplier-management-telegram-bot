@@ -13,7 +13,7 @@ test('waiting checklist paginates, confirms removals and handles stale actions',
   const suppliers = new SupplierRepository(db);
   const orders = new OrderRepository(db);
   const waiting = new WaitingRepository(db);
-  const supplier = suppliers.create({ name: 'A' });
+  const supplier = suppliers.create({ name: 'Ա & <😀>' });
   orders.append(supplier.id, Array.from({ length: 12 }, (_, i) => `Item ${i + 1}`));
   const ids = orders.list(supplier.id).map((item) => item.id);
   orders.confirm(supplier.id, ids, ids);
@@ -31,7 +31,15 @@ test('waiting checklist paginates, confirms removals and handles stale actions',
   const button = (label: string) => latest().reply_markup.inline_keyboard.flat().find((b: any) => b.text === label)?.callback_data as string;
   const click = async (data: string) => bot.handleUpdate({ update_id: ++update, callback_query: { id: String(update), from, chat_instance: 'x', message: { message_id: msg, date: 0, chat }, data } });
   try {
-    await start(); await click(button('A')); await click(button('⏳ Սպասում (12)'));
+    await start(); await click(button('Ա & <😀>'));
+    assert.equal(latest().text, 'Ա & <😀>');
+    assert.deepEqual(latest().entities, [{ type: 'bold', offset: 0, length: 'Ա & <😀>'.length }]);
+    await click(button('⏳ Սպասում (12)'));
+    assert.equal(calls.at(-1)?.method, 'editMessageText');
+    assert.equal(latest().text.slice(0, 'Ա & <😀>'.length), 'Ա & <😀>');
+    assert.deepEqual(latest().entities[0], { type: 'bold', offset: 0, length: 'Ա & <😀>'.length });
+    assert.equal(latest().text.slice(latest().entities[1].offset, latest().entities[1].offset + latest().entities[1].length), '⏳ Սպասում');
+    assert.ok(latest().reply_markup.inline_keyboard.filter((row: any[]) => row.some((b: any) => ['📥 Ստանալ ընտրվածը', '↩️ Վերադարձնել պատվեր'].includes(b.text))).every((row: any[]) => row.length === 1));
     await click(button('☐ Item 1')); await click(button('➡️')); await click(button('☐ Item 11'));
     assert.match(latest().text, /2 \/ 12/);
     await click(button('✅ Ընտրել բոլորը')); assert.match(latest().text, /12 \/ 12/);
@@ -50,7 +58,11 @@ test('waiting checklist paginates, confirms removals and handles stale actions',
     await click(button('☐ Item 3')); await click(button('↩️ Վերադարձնել պատվեր'));
     assert.equal(orders.list(supplier.id)[0]?.text, 'Item 3');
     assert.equal(waiting.list(supplier.id).length, 8);
-    await click(button('☐ Item 4'));
+    await click(button('✅ Ընտրել բոլորը'));
+    await click(button('📥 Ստանալ ընտրվածը'));
+    assert.equal(waiting.list(supplier.id).length, 0);
+    assert.ok(button('⬅️ Մատակարարի էջ'));
+    assert.equal(button('❌ Չեղարկել'), undefined);
     const before = waiting.list(supplier.id).length;
     await start(); assert.equal(waiting.list(supplier.id).length, before);
   } finally { proto.callApi = original; db.close(); }

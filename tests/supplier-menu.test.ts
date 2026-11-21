@@ -44,7 +44,7 @@ test('supplier menu creation, search, navigation, stale buttons and authorizatio
     await send('Alpha');
     assert.equal(repo.listActive().length, 1);
     assert.match(latest().text, /Alpha/);
-    assert.deepEqual(latest().entities, [{ type: 'bold', offset: latest().text.indexOf('Alpha'), length: 5 }]);
+    assert.ok(latest().entities.some((entity: any) => entity.type === 'bold' && entity.offset === latest().text.indexOf('Alpha') && entity.length === 5));
     await send('/addsupplier');
     await send('alpha');
     assert.match(latest().text, /արդեն կա/);
@@ -52,7 +52,7 @@ test('supplier menu creation, search, navigation, stale buttons and authorizatio
     assert.ok(button('Alpha'));
     assert.ok(button('🔎 Փնտրել մատակարար'));
     assert.ok(button('➕ Ավելացնել մատակարար'));
-    assert.equal(latest().reply_markup.inline_keyboard.at(-1).length, 2);
+    assert.ok(latest().reply_markup.inline_keyboard.filter((row: any[]) => row.some((b: any) => ['🔎 Փնտրել մատակարար', '➕ Ավելացնել մատակարար'].includes(b.text))).every((row: any[]) => row.length === 1));
     await click(oldSearch, oldId);
     assert.equal(calls.at(-1)?.method, 'answerCallbackQuery');
     assert.match(calls.at(-1)?.payload.text, /ակտիվ չէ/);
